@@ -240,7 +240,13 @@ function MarkdownToc({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(true);
+  const activeItemRef = useRef<HTMLButtonElement | null>(null);
   const minDepth = useMemo(() => Math.min(...toc.map((entry) => entry.depth)), [toc]);
+
+  useEffect(() => {
+    if (!open || !activeId) return;
+    activeItemRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeId, open]);
 
   return (
     <div className={`md-toc${open ? "" : " md-toc-collapsed"}`}>
@@ -261,6 +267,7 @@ function MarkdownToc({
               type="button"
               data-depth={Math.min(entry.depth - minDepth + 1, 6)}
               className={`md-toc-item${activeId === entry.id ? " active" : ""}`}
+              ref={activeId === entry.id ? activeItemRef : undefined}
               onClick={() => onJump(entry.id)}
               title={entry.text}
             >

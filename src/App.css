@@ -668,8 +668,9 @@ body {
   top: 14px;
   right: 18px;
   z-index: 5;
-  width: 200px;
-  max-height: calc(100% - 28px);
+  width: 240px;
+  max-width: calc(100% - 36px);
+  max-height: min(520px, calc(100% - 28px));
   display: flex;
   flex-direction: column;
   background: var(--bg-card);
@@ -685,6 +686,7 @@ body {
 }
 
 .md-toc-toggle {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -704,16 +706,24 @@ body {
 }
 
 .md-toc-list {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 4px 4px 6px;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-top: 1px solid var(--border-dim);
 }
 
 .md-toc-item {
+  flex: 0 0 auto;
   display: block;
   width: 100%;
+  min-height: 24px;
+  box-sizing: border-box;
   padding: 4px 8px;
   border: none;
   border-radius: 4px;
