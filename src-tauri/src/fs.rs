@@ -1,5 +1,5 @@
 use base64::Engine;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(serde::Serialize)]
@@ -25,6 +25,12 @@ pub(crate) struct ImagePreviewData {
     data_url: String,
     mime_type: String,
     byte_length: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ImportExternalPathsResult {
+    imported_paths: Vec<String>,
 }
 
 const IGNORED_DIRS: &[&str] = &[
@@ -234,6 +240,91 @@ fn previewable_image_mime_type(path: &Path) -> Option<&'static str> {
         "svg" => Some("image/svg+xml"),
         _ => None,
     }
+}
+
+fn unique_destination_path(target_dir: &Path, source_name: &str, is_dir: bool) -> PathBuf {
+    let initial = target_dir.join(source_name);
+    if !initial.exists() {
+        return initial;
+    }
+
+    let source_path = Path::new(source_name);
+    let stem = source_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(source_name);
+    let extension = source_path.extension().and_then(|s| s.to_str());
+
+    for idx in 2.. {
+        let candidate_name = if is_dir {
+            format!("{} {}", source_name, idx)
+        } else if let Some(ext) = extension {
+            format!("{} {}.{}", stem, idx, ext)
+        } else {
+            format!("{} {}", source_name, idx)
+        };
+        let candidate = target_dir.join(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded destination name search should always return")
+}
+
+fn copy_file_create_new(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::io;
+
+    let mut input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                "A file or folder with that name already exists".to_string()
+            }
+            _ => e.to_string(),
+        })?;
+
+    match io::copy(&mut input, &mut output) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(destination);
+            Err(e.to_string())
+        }
+    }
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::create_dir(destination).map_err(|e| e.to_string())?;
+
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source_path = entry.path();
+        let metadata = std::fs::symlink_metadata(&source_path).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err("Symlinks are not supported when importing folders".to_string());
+        }
+
+        let name = entry
+            .file_name()
+            .to_str()
+            .ok_or_else(|| "Invalid file name".to_string())?
+            .to_string();
+        validate_entry_name(&name)?;
+        let destination_path = destination.join(name);
+
+        if metadata.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            copy_file_create_new(&source_path, &destination_path)?;
+        } else {
+            return Err("Unsupported filesystem entry".to_string());
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -458,6 +549,69 @@ pub async fn create_directory(path: String, project_path: String) -> Result<(), 
             }
             _ => e.to_string(),
         })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn import_external_paths(
+    source_paths: Vec<String>,
+    target_dir: String,
+    project_path: String,
+) -> Result<ImportExternalPathsResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if source_paths.is_empty() {
+            return Ok(ImportExternalPathsResult {
+                imported_paths: Vec::new(),
+            });
+        }
+
+        let target_dir = validate_path_within(&target_dir, &project_path, false)?;
+        if !target_dir.is_dir() {
+            return Err("Import target must be a directory".to_string());
+        }
+
+        let mut imported_paths = Vec::with_capacity(source_paths.len());
+        for source in source_paths {
+            let source_path = Path::new(&source);
+            if !source_path.is_absolute() {
+                return Err("Source path must be absolute".to_string());
+            }
+
+            let metadata = std::fs::symlink_metadata(source_path).map_err(|e| e.to_string())?;
+            if metadata.file_type().is_symlink() {
+                return Err("Symlinks are not supported".to_string());
+            }
+            if !metadata.is_file() && !metadata.is_dir() {
+                return Err("Unsupported filesystem entry".to_string());
+            }
+
+            let canonical_source = source_path
+                .canonicalize()
+                .map_err(|e| format!("Cannot resolve source path: {}", e))?;
+            if metadata.is_dir() && target_dir.starts_with(&canonical_source) {
+                return Err("Cannot import a folder into itself".to_string());
+            }
+
+            let source_name = source_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| "Invalid file name".to_string())?
+                .to_string();
+            validate_entry_name(&source_name)?;
+
+            let destination = unique_destination_path(&target_dir, &source_name, metadata.is_dir());
+            if metadata.is_dir() {
+                copy_dir_recursive(&canonical_source, &destination)?;
+            } else {
+                copy_file_create_new(&canonical_source, &destination)?;
+            }
+
+            imported_paths.push(destination.to_string_lossy().into_owned());
+        }
+
+        Ok(ImportExternalPathsResult { imported_paths })
     })
     .await
     .map_err(|e| e.to_string())?

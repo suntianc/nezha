@@ -25,6 +25,8 @@ export function TreeItem({
   const isHighlighted = isSelected || isContextTarget;
   return (
     <div
+      data-file-tree-path={node.path}
+      data-file-tree-is-dir={node.is_dir ? "true" : "false"}
       onClick={() => (node.is_dir ? onToggle(node.path) : onSelect(node))}
       onContextMenu={(e) => onContextMenu(e, node)}
       style={{

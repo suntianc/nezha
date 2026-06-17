@@ -159,6 +159,7 @@ pub fn run() {
             fs::write_file_content,
             fs::create_file,
             fs::create_directory,
+            fs::import_external_paths,
             fs::delete_path,
             fs::list_project_files,
             fs::search_project_files,

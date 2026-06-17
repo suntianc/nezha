@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useCancellableInvoke } from "../hooks/useCancellableInvoke";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { RotateCcw } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 import s from "../styles";
 import { useToast } from "./Toast";
 import { useI18n } from "../i18n";
@@ -10,6 +10,7 @@ import { writeClipboardText } from "./file-explorer/clipboard";
 import { FileExplorerContextMenu } from "./file-explorer/ContextMenu";
 import { CreateInputRow } from "./file-explorer/CreateInputRow";
 import { TreeItem } from "./file-explorer/TreeItem";
+import { useExternalFileDrop } from "./file-explorer/useExternalFileDrop";
 import {
   AUTO_REFRESH_MS,
   ROW_HEIGHT,
@@ -27,6 +28,10 @@ import {
   pathSeparator,
   updateNode,
 } from "./file-explorer/treeUtils";
+
+interface ImportExternalPathsResult {
+  importedPaths: string[];
+}
 
 export function FileExplorer({
   projectPath,
@@ -47,6 +52,7 @@ export function FileExplorer({
   const [loading, setLoading] = useState(true);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(500);
+  const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { showToast } = useToast();
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
@@ -58,6 +64,9 @@ export function FileExplorer({
   const inputRef = useRef<HTMLInputElement>(null);
   const commitInFlightRef = useRef(false);
   const deleteInFlightRef = useRef(false);
+  const importInFlightRef = useRef(false);
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  const [importingCount, setImportingCount] = useState<number | null>(null);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, node: TreeNode) => {
     e.preventDefault();
@@ -269,6 +278,68 @@ export function FileExplorer({
     [handleToggle, projectPath],
   );
 
+  const importExternalPaths = useCallback(
+    async (sourcePaths: string[], targetDir: string) => {
+      if (importInFlightRef.current || sourcePaths.length === 0) return;
+      importInFlightRef.current = true;
+      setImportingCount(sourcePaths.length);
+      setCtxMenu(null);
+      setCreating(null);
+
+      try {
+        const result = await safeInvoke<ImportExternalPathsResult>("import_external_paths", {
+          sourcePaths,
+          targetDir,
+          projectPath,
+        });
+        if (result === null) return;
+        if (targetDir !== projectPath) {
+          ensureExpanded(targetDir);
+        }
+        await refresh();
+        if (isCancelled()) return;
+
+        const firstImported = result.importedPaths[0];
+        if (firstImported) {
+          setSelectedPath(firstImported);
+        }
+        showToast(t("file.importSuccess", { count: result.importedPaths.length }), "success");
+      } catch (error) {
+        if (!isCancelled()) {
+          showToast(t("file.importFailed", { error: String(error) }));
+        }
+      } finally {
+        importInFlightRef.current = false;
+        setImportingCount(null);
+      }
+    },
+    [
+      ensureExpanded,
+      isCancelled,
+      projectPath,
+      refresh,
+      safeInvoke,
+      showToast,
+      t,
+    ],
+  );
+
+  const handleExternalDrop = useCallback(
+    (sourcePaths: string[], targetDir: string) => {
+      void importExternalPaths(sourcePaths, targetDir);
+    },
+    [importExternalPaths],
+  );
+
+  useExternalFileDrop({
+    active,
+    projectPath,
+    panelRef,
+    scrollRef,
+    onDropTargetChange: setDropTargetPath,
+    onDrop: handleExternalDrop,
+  });
+
   const startCreate = useCallback(
     (kind: CreateKind) => {
       if (!ctxMenu) return;
@@ -409,7 +480,13 @@ export function FileExplorer({
   }, [ctxMenu, isCancelled, projectPath, refresh, safeInvoke, showToast, t]);
 
   return (
-    <div style={{ ...s.fileExplorerRoot, width }}>
+    <div ref={panelRef} style={{ ...s.fileExplorerRoot, width }}>
+      {importingCount !== null && (
+        <div style={s.fileImportLoadingToast}>
+          <Loader2 size={14} className="spin" />
+          <span>{t("file.importing", { count: importingCount })}</span>
+        </div>
+      )}
       {ctxMenu && (
         <FileExplorerContextMenu
           ctxMenu={ctxMenu}
@@ -441,7 +518,12 @@ export function FileExplorer({
         </button>
       </div>
       {/* Project root label */}
-      <div style={s.fileExplorerRootLabel}>
+      <div
+        style={{
+          ...s.fileExplorerRootLabel,
+          ...(dropTargetPath === projectPath ? s.fileExplorerDropTarget : null),
+        }}
+      >
         <span style={s.fileExplorerRootIcon} />
         {projectName}
       </div>
@@ -474,7 +556,7 @@ export function FileExplorer({
                     node={row.node}
                     depth={row.depth}
                     selectedPath={selectedPath}
-                    contextPath={ctxMenu?.path ?? null}
+                    contextPath={ctxMenu?.path ?? dropTargetPath}
                     onSelect={handleSelect}
                     onToggle={handleToggle}
                     onContextMenu={handleContextMenu}
