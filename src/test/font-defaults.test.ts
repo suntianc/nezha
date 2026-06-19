@@ -6,15 +6,13 @@ describe("font defaults", () => {
     vi.unstubAllGlobals();
   });
 
-  test("uses the Windows mono stack on Windows user agents", () => {
+  test("uses Consolas as the Windows mono default", () => {
     vi.stubGlobal("navigator", {
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36",
     });
 
-    expect(getDefaultMonoFont()).toBe(
-      'Consolas, "Cascadia Mono", "JetBrains Mono", "Fira Code", monospace',
-    );
+    expect(getDefaultMonoFont()).toBe("Consolas");
   });
 
   test("treats every auto default stack as replaceable", () => {
@@ -25,6 +23,9 @@ describe("font defaults", () => {
       isAutoDefaultMonoFont(
         '"JetBrains Mono", "Fira Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, ui-monospace, monospace',
       ),
+    ).toBe(true);
+    expect(
+      isAutoDefaultMonoFont('Consolas, "Cascadia Mono", "JetBrains Mono", "Fira Code", monospace'),
     ).toBe(true);
     expect(isAutoDefaultMonoFont('"JetBrains Mono"')).toBe(false);
   });
