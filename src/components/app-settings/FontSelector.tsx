@@ -73,7 +73,6 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
   }, [open, loaded, value, filtered]);
 
   const displayName = parseFirstFontName(value);
-  const isDefaultFont = value === defaultFont;
 
   const handleSelect = useCallback(
     (font: string) => {
@@ -113,13 +112,8 @@ export function FontSelector({ value, onChange, label, hint, defaultFont, previe
             </span>
             <button
               type="button"
-              disabled={isDefaultFont}
               onClick={() => onChange(defaultFont)}
-              style={{
-                ...s.fontSelectorResetBtn,
-                opacity: isDefaultFont ? 0.45 : 1,
-                cursor: isDefaultFont ? "default" : "pointer",
-              }}
+              style={s.fontSelectorResetBtn}
             >
               <RotateCcw size={11} />
               {t("common.reset")}
