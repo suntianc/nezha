@@ -44,23 +44,11 @@ pub(crate) fn login_shell_path() -> &'static str {
 }
 
 pub(crate) fn default_shell_command() -> ShellCommand {
-    if !detect_path("pwsh").is_empty() {
-        return ShellCommand {
-            program: "pwsh".to_string(),
-            args: vec!["-NoLogo".to_string()],
-        };
-    }
-
-    if !detect_path("powershell").is_empty() {
-        return ShellCommand {
-            program: "powershell".to_string(),
-            args: vec!["-NoLogo".to_string()],
-        };
-    }
-
+    // cmd.exe 优先，避免 PowerShell 启动慢且兼容性更好的问题
+    let comspec = std::env::var("ComSpec")
+        .unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".to_string());
     ShellCommand {
-        program: std::env::var("ComSpec")
-            .unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".to_string()),
+        program: comspec,
         args: Vec::new(),
     }
 }
