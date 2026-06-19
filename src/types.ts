@@ -50,6 +50,8 @@ const MONO_FONT_LINUX: FontFamily =
   '"JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "Liberation Mono", ui-monospace, monospace';
 const MONO_FONT_FALLBACK: FontFamily =
   '"JetBrains Mono", "Fira Code", ui-monospace, monospace';
+const MONO_FONT_PR326_INITIAL_FALLBACK: FontFamily =
+  '"JetBrains Mono", "Fira Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, ui-monospace, monospace';
 
 export function getDefaultMonoFont(): FontFamily {
   if (typeof navigator === "undefined") return MONO_FONT_FALLBACK;
@@ -68,6 +70,7 @@ const LEGACY_AUTO_MONO_FONTS: ReadonlySet<string> = new Set([
   MONO_FONT_WINDOWS,
   MONO_FONT_MAC,
   MONO_FONT_LINUX,
+  MONO_FONT_PR326_INITIAL_FALLBACK,
 ]);
 
 export function isAutoDefaultMonoFont(value: string): boolean {
