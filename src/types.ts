@@ -42,7 +42,7 @@ export type FontFamily = string;
 export const DEFAULT_UI_FONT: FontFamily =
   '"SF Pro Display", "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif';
 export const DEFAULT_MONO_FONT: FontFamily =
-  '"JetBrains Mono", "Fira Code", ui-monospace, monospace';
+  '"JetBrains Mono", "Fira Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, ui-monospace, monospace';
 
 export type TaskStatus =
   | "todo"
