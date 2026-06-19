@@ -42,7 +42,8 @@ export type FontFamily = string;
 export const DEFAULT_UI_FONT: FontFamily =
   '"SF Pro Display", "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif';
 
-const MONO_FONT_WINDOWS: FontFamily =
+const MONO_FONT_WINDOWS: FontFamily = "Consolas";
+const MONO_FONT_WINDOWS_STACK: FontFamily =
   'Consolas, "Cascadia Mono", "JetBrains Mono", "Fira Code", monospace';
 const MONO_FONT_MAC: FontFamily =
   '"JetBrains Mono", "Fira Code", "SF Mono", Menlo, ui-monospace, monospace';
@@ -68,6 +69,7 @@ export function getDefaultMonoFont(): FontFamily {
 const LEGACY_AUTO_MONO_FONTS: ReadonlySet<string> = new Set([
   MONO_FONT_FALLBACK,
   MONO_FONT_WINDOWS,
+  MONO_FONT_WINDOWS_STACK,
   MONO_FONT_MAC,
   MONO_FONT_LINUX,
   MONO_FONT_PR326_INITIAL_FALLBACK,
