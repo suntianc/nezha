@@ -528,6 +528,7 @@ export function initTerminal(
 ): InitTerminalResult {
   const term = new Terminal({
     convertEol: false,
+    lineHeight: 1.2,
     scrollback,
     cursorBlink: true,
     fontFamily,
