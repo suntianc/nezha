@@ -437,6 +437,7 @@ export function ProjectPage({
                 onSubmit={onSubmitTask}
                 initialDraft={newTaskDraftRef.current}
                 onCacheDraft={handleCacheNewTaskDraft}
+                active={visible}
               />
             ) : selectedTask.status === ("todo" as TaskStatus) ? (
               <TodoTaskView

@@ -1,5 +1,7 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TriangleAlert, Sparkles } from "lucide-react";
 import type { Project, AgentType, PermissionMode } from "../types";
 import type { HookAgentReadiness } from "./app-settings/types";
@@ -12,9 +14,18 @@ import {
 } from "./new-task/MentionPopover";
 import {
   PromptEditor,
+  insertTextIntoPromptEditor,
+  placePromptEditorCaretFromPoint,
+  readPromptEditorContent,
   usePromptEditor,
   type PromptEditorContent,
 } from "./new-task/PromptEditor";
+import {
+  FILE_TREE_POINTER_DRAG_EVENT,
+  formatDroppedPaths,
+  readFileTreeDropPaths,
+  type FileTreePointerDragDetail,
+} from "./new-task/pathDrop";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
 import { AgentPermSelector } from "./new-task/AgentPermSelector";
@@ -71,6 +82,7 @@ export function NewTaskView({
   onSubmit,
   initialDraft,
   onCacheDraft,
+  active = true,
 }: {
   project: Project;
   otherProjects?: Project[];
@@ -86,6 +98,7 @@ export function NewTaskView({
   }) => void;
   initialDraft?: NewTaskDraft | null;
   onCacheDraft?: (draft: NewTaskDraft | null) => void;
+  active?: boolean;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -115,8 +128,12 @@ export function NewTaskView({
       (initialDraft?.pastedTexts?.length ?? 0) === 0,
   );
   const [sendShortcut, setSendShortcut] = useState<SendShortcut>(DEFAULT_SEND_SHORTCUT);
+  const [externalDropTarget, setExternalDropTarget] = useState(false);
 
   const { editorRef, isComposingRef, handle: editorHandle } = usePromptEditor();
+  const newTaskOuterRef = useRef<HTMLDivElement>(null);
+  const composeCardRef = useRef<HTMLDivElement>(null);
+  const lastExternalDropRef = useRef<{ key: string; at: number } | null>(null);
   const editorContentRef = useRef<PromptEditorContent>({
     html: initialDraft?.promptHtml ?? "",
     text: (initialDraft?.promptHtml ?? "").replace(/<[^>]+>/g, ""),
@@ -330,7 +347,7 @@ export function NewTaskView({
   const isCrossMode = activeCrossProject !== null;
   const isCrossLoading = isCrossMode && !crossProjectFiles.has(activeCrossProject!.id);
 
-  function updateMentionState() {
+  const updateMentionState = useCallback(() => {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) {
       setMentionSearch(null);
@@ -355,7 +372,196 @@ export function NewTaskView({
     }
     setMentionSearch(query);
     setMentionIndex(0);
-  }
+  }, []);
+
+  const toCssPoint = useCallback(
+    (position: { x: number; y: number }, source: "css" | "physical") => {
+      if (source === "css") return position;
+      const scale = window.devicePixelRatio || 1;
+      return {
+        x: position.x / scale,
+        y: position.y / scale,
+      };
+    },
+    [],
+  );
+
+  const findNewTaskDropPoint = useCallback((position: { x: number; y: number }) => {
+    const outer = newTaskOuterRef.current;
+    const editor = editorRef.current;
+    if (!outer || !editor) return null;
+
+    const outerRect = outer.getBoundingClientRect();
+    if (
+      position.x < outerRect.left ||
+      position.x > outerRect.right ||
+      position.y < outerRect.top ||
+      position.y > outerRect.bottom
+    ) {
+      return null;
+    }
+
+    const element = document.elementFromPoint(position.x, position.y);
+    if (element && !outer.contains(element)) return null;
+    const editorRect = editor.getBoundingClientRect();
+    return {
+      point: position,
+      insideEditor:
+        position.x >= editorRect.left &&
+        position.x <= editorRect.right &&
+        position.y >= editorRect.top &&
+        position.y <= editorRect.bottom,
+    };
+  }, [editorRef]);
+
+  const insertDroppedPaths = useCallback(
+    (paths: string[], source: "external" | "file-tree") => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const text = formatDroppedPaths(paths, project.path, source);
+      if (!text) return;
+      if (!insertTextIntoPromptEditor(editor, text)) return;
+      const content = readPromptEditorContent(editor);
+      editorContentRef.current = content;
+      setIsEmpty(!content.text.trim() && !content.hasChips);
+      setMentionSearch(null);
+    },
+    [editorRef, project.path],
+  );
+
+  useEffect(() => {
+    if (!active) {
+      setExternalDropTarget(false);
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    function handleDragDropPayload(payload: DragDropEvent) {
+      if (payload.type === "leave") {
+        setExternalDropTarget(false);
+        return;
+      }
+
+      const target = findNewTaskDropPoint(toCssPoint(payload.position, "physical"));
+      if (payload.type === "enter" || payload.type === "over") {
+        setExternalDropTarget(Boolean(target));
+        return;
+      }
+
+      setExternalDropTarget(false);
+      if (!target || payload.paths.length === 0 || !editorRef.current) return;
+      const key = payload.paths.join("\n");
+      const now = Date.now();
+      const lastDrop = lastExternalDropRef.current;
+      if (lastDrop && lastDrop.key === key && now - lastDrop.at < 750) return;
+      lastExternalDropRef.current = { key, at: now };
+
+      if (target.insideEditor) {
+        placePromptEditorCaretFromPoint(editorRef.current, target.point.x, target.point.y);
+      }
+      insertDroppedPaths(payload.paths, "external");
+    }
+
+    const addListener = (listenPromise: Promise<() => void>) => {
+      listenPromise
+        .then((cleanup) => {
+          if (disposed) {
+            cleanup();
+          } else if (unlisten) {
+            const previous = unlisten;
+            unlisten = () => {
+              previous();
+              cleanup();
+            };
+          } else {
+            unlisten = cleanup;
+          }
+        })
+        .catch(console.error);
+    };
+
+    const handler = (event: { payload: DragDropEvent }) => {
+      if (!disposed) handleDragDropPayload(event.payload);
+    };
+    addListener(getCurrentWebview().onDragDropEvent(handler));
+    addListener(getCurrentWindow().onDragDropEvent(handler));
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [active, editorRef, findNewTaskDropPoint, insertDroppedPaths, toCssPoint]);
+
+  useEffect(() => {
+    if (!active) return;
+
+    function handleFileTreePointerDrag(event: Event) {
+      const { detail } = event as CustomEvent<FileTreePointerDragDetail>;
+      const target = findNewTaskDropPoint(toCssPoint({ x: detail.x, y: detail.y }, "css"));
+      if (detail.type === "start" || detail.type === "move") {
+        setExternalDropTarget(Boolean(target));
+        return;
+      }
+
+      setExternalDropTarget(false);
+      if (detail.type !== "drop" || !target || detail.paths.length === 0 || !editorRef.current) {
+        return;
+      }
+      if (target.insideEditor) {
+        placePromptEditorCaretFromPoint(editorRef.current, target.point.x, target.point.y);
+      }
+      insertDroppedPaths(detail.paths, "file-tree");
+    }
+
+    function handleWindowDragOver(event: DragEvent) {
+      if (!event.dataTransfer) return;
+      const paths = readFileTreeDropPaths(event.dataTransfer);
+      const target = findNewTaskDropPoint(
+        toCssPoint({ x: event.clientX, y: event.clientY }, "css"),
+      );
+      if (paths.length === 0 || !target) {
+        setExternalDropTarget(false);
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "copy";
+      setExternalDropTarget(true);
+    }
+
+    function handleWindowDrop(event: DragEvent) {
+      if (!event.dataTransfer) return;
+      const paths = readFileTreeDropPaths(event.dataTransfer);
+      const target = findNewTaskDropPoint(
+        toCssPoint({ x: event.clientX, y: event.clientY }, "css"),
+      );
+      setExternalDropTarget(false);
+      if (paths.length === 0 || !target || !editorRef.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (target.insideEditor) {
+        placePromptEditorCaretFromPoint(editorRef.current, target.point.x, target.point.y);
+      }
+      insertDroppedPaths(paths, "file-tree");
+    }
+
+    function handleWindowDragEnd() {
+      setExternalDropTarget(false);
+    }
+
+    window.addEventListener(FILE_TREE_POINTER_DRAG_EVENT, handleFileTreePointerDrag);
+    window.addEventListener("dragover", handleWindowDragOver, true);
+    window.addEventListener("drop", handleWindowDrop, true);
+    window.addEventListener("dragend", handleWindowDragEnd, true);
+    return () => {
+      window.removeEventListener(FILE_TREE_POINTER_DRAG_EVENT, handleFileTreePointerDrag);
+      window.removeEventListener("dragover", handleWindowDragOver, true);
+      window.removeEventListener("drop", handleWindowDrop, true);
+      window.removeEventListener("dragend", handleWindowDragEnd, true);
+    };
+  }, [active, editorRef, findNewTaskDropPoint, insertDroppedPaths, toCssPoint]);
 
   function handleInitializeMd() {
     const filename = agent === "claude" ? "CLAUDE.md" : "AGENTS.md";
@@ -421,7 +627,7 @@ export function NewTaskView({
   }
 
   return (
-    <div style={s.newTaskOuter}>
+    <div ref={newTaskOuterRef} style={s.newTaskOuter}>
       {/* Header */}
       <div style={s.newTaskHeader}>
         <img
@@ -489,7 +695,27 @@ export function NewTaskView({
       )}
 
       {/* Compose card */}
-      <div style={{ ...s.composeCard, position: "relative" }} onPaste={handleEditorPaste}>
+      <div
+        ref={composeCardRef}
+        style={{ ...s.composeCard, position: "relative" }}
+        onPaste={handleEditorPaste}
+        onDragOver={(event) => {
+          if (readFileTreeDropPaths(event.dataTransfer).length === 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(event) => {
+          const paths = readFileTreeDropPaths(event.dataTransfer);
+          if (paths.length === 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (editorRef.current) {
+            placePromptEditorCaretFromPoint(editorRef.current, event.clientX, event.clientY);
+          }
+          insertDroppedPaths(paths, "file-tree");
+        }}
+      >
         {/* Mention dropdown */}
         {mentionSearch !== null && (
           <MentionPopover
@@ -533,6 +759,8 @@ export function NewTaskView({
             setPastedTexts((prev) => [...prev, { id: `${Date.now()}-${Math.random()}`, text }]);
             setIsEmpty(false);
           }}
+          onDropFileTreePaths={(paths) => insertDroppedPaths(paths, "file-tree")}
+          externalDropTarget={externalDropTarget}
         />
 
         {/* Attachment previews (images + pasted text on a single row) */}

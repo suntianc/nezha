@@ -1,7 +1,8 @@
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useState } from "react";
 import type { Project } from "../../types";
 import { CODE_EXTS } from "../../utils";
 import type { FileEntry, CrossProjectRef, MentionItem } from "./MentionPopover";
+import { NEZHA_FILE_PATHS_MIME, readFileTreeDropPaths } from "./pathDrop";
 import { useI18n } from "../../i18n";
 import { APP_PLATFORM } from "../../platform";
 import {
@@ -179,6 +180,99 @@ function serializeEditor(editor: HTMLDivElement): string {
     .trim();
 }
 
+export function readPromptEditorContent(editor: HTMLDivElement): PromptEditorContent {
+  return {
+    html: editor.innerHTML,
+    text: editor.textContent || "",
+    hasChips: !!editor.querySelector("[data-file-path]"),
+  };
+}
+
+function rangeIsInsideEditor(editor: HTMLDivElement, range: Range): boolean {
+  const container = range.commonAncestorContainer;
+  return container === editor || editor.contains(container);
+}
+
+export function placePromptEditorCaretFromPoint(
+  editor: HTMLDivElement,
+  x: number,
+  y: number,
+): boolean {
+  const doc = editor.ownerDocument;
+  const caretDoc = doc as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (
+      x: number,
+      y: number,
+    ) => { offsetNode: Node; offset: number } | null;
+  };
+  let range: Range | null = null;
+
+  if (typeof caretDoc.caretRangeFromPoint === "function") {
+    range = caretDoc.caretRangeFromPoint(x, y);
+  } else if (typeof caretDoc.caretPositionFromPoint === "function") {
+    const position = caretDoc.caretPositionFromPoint(x, y);
+    if (position) {
+      range = doc.createRange();
+      range.setStart(position.offsetNode, position.offset);
+      range.collapse(true);
+    }
+  }
+
+  if (!range || !rangeIsInsideEditor(editor, range)) return false;
+
+  const selection = doc.defaultView?.getSelection();
+  if (!selection) return false;
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
+export function insertTextIntoPromptEditor(editor: HTMLDivElement, text: string): boolean {
+  if (!text) return false;
+
+  const doc = editor.ownerDocument;
+  const selection = doc.defaultView?.getSelection();
+  let range: Range | null = null;
+  if (selection && selection.rangeCount > 0) {
+    const selectedRange = selection.getRangeAt(0);
+    if (rangeIsInsideEditor(editor, selectedRange)) {
+      range = selectedRange.cloneRange();
+    }
+  }
+
+  if (!range) {
+    range = doc.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  const beforeRange = range.cloneRange();
+  beforeRange.selectNodeContents(editor);
+  beforeRange.setEnd(range.startContainer, range.startOffset);
+  const before = beforeRange.toString();
+
+  const afterRange = range.cloneRange();
+  afterRange.selectNodeContents(editor);
+  afterRange.setStart(range.endContainer, range.endOffset);
+  const after = afterRange.toString();
+
+  const prefix = before && !/\s$/.test(before) ? " " : "";
+  const suffix = after && !/^\s/.test(after) ? " " : "";
+  const inserted = doc.createTextNode(`${prefix}${text}${suffix}`);
+
+  range.deleteContents();
+  range.insertNode(inserted);
+
+  const nextRange = doc.createRange();
+  nextRange.setStart(inserted, inserted.textContent?.length ?? 0);
+  nextRange.collapse(true);
+  selection?.removeAllRanges();
+  selection?.addRange(nextRange);
+  editor.focus();
+  return true;
+}
+
 function insertEditorLineBreak() {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return;
@@ -234,6 +328,8 @@ export function PromptEditor({
   onSubmit,
   onContentChange,
   onPasteLargeText,
+  onDropFileTreePaths,
+  externalDropTarget = false,
 }: {
   editorRef: React.RefObject<HTMLDivElement | null>;
   isComposingRef: React.MutableRefObject<boolean>;
@@ -249,16 +345,15 @@ export function PromptEditor({
   onSubmit: (immediate: boolean) => void;
   onContentChange?: (content: PromptEditorContent) => void;
   onPasteLargeText?: (text: string) => void;
+  onDropFileTreePaths?: (paths: string[]) => void;
+  externalDropTarget?: boolean;
 }) {
   const { t } = useI18n();
+  const [fileTreeDragOver, setFileTreeDragOver] = useState(false);
   const captureContent = useCallback(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    onContentChange?.({
-      html: editor.innerHTML,
-      text: editor.textContent || "",
-      hasChips: !!editor.querySelector("[data-file-path]"),
-    });
+    onContentChange?.(readPromptEditorContent(editor));
   }, [editorRef, onContentChange]);
 
   const selectFile = useCallback(
@@ -436,6 +531,32 @@ export function PromptEditor({
     onUpdateMention();
   }
 
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    if (!Array.from(e.dataTransfer.types).includes(NEZHA_FILE_PATHS_MIME)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    setFileTreeDragOver(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    const nextTarget = e.relatedTarget;
+    if (nextTarget instanceof Node && e.currentTarget.contains(nextTarget)) return;
+    setFileTreeDragOver(false);
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    const paths = readFileTreeDropPaths(e.dataTransfer);
+    if (paths.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setFileTreeDragOver(false);
+    if (editorRef.current) {
+      placePromptEditorCaretFromPoint(editorRef.current, e.clientX, e.clientY);
+    }
+    onDropFileTreePaths?.(paths);
+  }
+
   return (
     <div style={{ position: "relative" }}>
       {isEmpty && (
@@ -466,6 +587,9 @@ export function PromptEditor({
         onInput={handleInput}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         onSelect={updateMentionState}
         onCompositionStart={() => {
           isComposingRef.current = true;
@@ -485,6 +609,12 @@ export function PromptEditor({
         style={
           {
             ...s.composeTextarea,
+            ...(fileTreeDragOver || externalDropTarget
+              ? {
+                  background: "var(--bg-selected)",
+                  boxShadow: "inset 0 0 0 1px var(--accent)",
+                }
+              : null),
             height: 120,
             overflowY: "auto",
             wordBreak: "break-word",
