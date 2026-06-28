@@ -661,6 +661,7 @@ export function RunningView({
         <div style={s.terminalContainer}>
           <TerminalView
             key={`${task.id}-${runCount}`}
+            agent={task.agent}
             onInput={onInput}
             onResize={onResize}
             onRegisterTerminal={onRegisterTerminal}

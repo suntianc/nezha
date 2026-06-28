@@ -10,7 +10,7 @@ import {
   normalizeShiftEnterNewline,
   TERMINAL_NEWLINE_SEQUENCE,
 } from "../shortcuts";
-import type { TerminalFontSize, FontFamily, ThemeVariant } from "../types";
+import type { AgentType, TerminalFontSize, FontFamily, ThemeVariant } from "../types";
 import {
   applyTerminalThemeOnPanel,
   initTerminal,
@@ -23,11 +23,13 @@ import {
   applyTerminalFontFamily,
   applyDomCharSizeOverride,
   refreshTerminalDisplay,
+  attachWindowsCodexWheelScrollFix,
 } from "./terminalShared";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalViewProps {
+  agent: AgentType;
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
   onRegisterTerminal: (
@@ -44,6 +46,7 @@ interface TerminalViewProps {
 }
 
 export function TerminalView({
+  agent,
   onInput,
   onResize,
   onRegisterTerminal,
@@ -105,6 +108,11 @@ export function TerminalView({
     const disposeCharSizeOverride = applyDomCharSizeOverride(term);
     const disposeScrollbarAutoHide = attachTerminalScrollbarAutoHide(term, container);
     const disposeInputFix = attachMacWebKitShiftInputFix(term);
+    const disposeWindowsCodexWheelScrollFix = attachWindowsCodexWheelScrollFix({
+      term,
+      agent,
+      onInput: (data) => onInputRef.current(data),
+    });
     const webglHandle = loadWebglAddon(term);
 
     const size = safeFit(fitAddon, term, container);
@@ -203,6 +211,7 @@ export function TerminalView({
       disposeScrollbarAutoHide();
       disposeMacWebKitGuard();
       disposeInputFix();
+      disposeWindowsCodexWheelScrollFix();
       disposeSmartCopy();
       disposeOnData.dispose();
       if (resizeTimer) clearTimeout(resizeTimer);

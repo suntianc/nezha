@@ -456,6 +456,11 @@ fn build_claude_cmd(agent_bin: &str, permission_mode: &str) -> CommandBuilder {
 /// 为 Codex 命令构建 CommandBuilder，并根据 permission_mode 添加全局执行标志。
 fn build_codex_cmd(agent_bin: &str, permission_mode: &str) -> CommandBuilder {
     let mut c = CommandBuilder::new(agent_bin);
+    // Windows ConPTY 不可靠透传 Codex 全屏 TUI 的鼠标滚轮事件；禁用 alt screen
+    // 让 Nezha/xterm 的 Host Scrollback 成为主要滚动路径。macOS/Linux 保持原生
+    // TUI 行为，见 ADR-0001。
+    #[cfg(target_os = "windows")]
+    c.arg("--no-alt-screen");
     match permission_mode {
         "auto_edit" => {
             // 等价于已弃用的 --full-auto（codex >= 0.128 已移除该别名）：
@@ -471,6 +476,46 @@ fn build_codex_cmd(agent_bin: &str, permission_mode: &str) -> CommandBuilder {
         _ => {}
     }
     c
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(cmd: &CommandBuilder) -> Vec<String> {
+        cmd.get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn codex_cmd_disables_alt_screen_on_windows() {
+        let args = argv(&build_codex_cmd("codex", "ask"));
+
+        assert!(args.contains(&"--no-alt-screen".to_string()));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn codex_cmd_keeps_alt_screen_on_non_windows() {
+        let args = argv(&build_codex_cmd("codex", "ask"));
+
+        assert!(!args.contains(&"--no-alt-screen".to_string()));
+    }
+
+    #[test]
+    fn codex_cmd_keeps_permission_flags() {
+        let args = argv(&build_codex_cmd("codex", "auto_edit"));
+
+        assert!(args.ends_with(&[
+            "--sandbox".to_string(),
+            "workspace-write".to_string(),
+            "-a".to_string(),
+            "on-request".to_string(),
+        ]));
+    }
 }
 
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────

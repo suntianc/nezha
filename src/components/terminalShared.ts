@@ -2,14 +2,15 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { IS_MAC_WEBKIT } from "../platform";
-import type { ThemeVariant } from "../types";
+import { APP_PLATFORM, IS_MAC_WEBKIT, type AppPlatform } from "../platform";
+import type { AgentType, ThemeVariant } from "../types";
 // xterm 私有字段访问的显式契约——见 xterm-private.d.ts 头部说明。
 import type { XTermWithPrivates } from "./xterm-private";
 
 // xterm 6 的自绘滚动条宽度由 overviewRuler.width 复用控制；FitAddon 会用它
 // 计算可用列数，因此必须和 App.css 中的滚动条槽宽保持一致。
 const XTERM_SCROLLBAR_WIDTH = 12;
+const WHEEL_SCROLL_LINES = 3;
 
 // ── Theme ────────────────────────────────────────────────────────────────────
 
@@ -584,6 +585,43 @@ export function attachTerminalScrollbarAutoHide(term: Terminal, container: HTMLE
     clearScrollHideTimer();
     container.classList.remove("nezha-xterm-scrolling");
     scrollDisposable.dispose();
+  };
+}
+
+interface WheelScrollTerminal {
+  buffer: { active: { type: "normal" | "alternate" } };
+  attachCustomWheelEventHandler: (handler: (event: WheelEvent) => boolean) => void;
+  scrollLines: (amount: number) => void;
+}
+
+export interface WindowsCodexWheelScrollOptions {
+  term: WheelScrollTerminal;
+  agent: AgentType;
+  onInput: (data: string) => void;
+  platform?: AppPlatform;
+}
+
+export function attachWindowsCodexWheelScrollFix({
+  term,
+  agent,
+  onInput,
+  platform = APP_PLATFORM,
+}: WindowsCodexWheelScrollOptions): () => void {
+  if (platform !== "windows" || agent !== "codex") return () => {};
+
+  term.attachCustomWheelEventHandler((event) => {
+    if (event.deltaY === 0) return true;
+    if (term.buffer.active.type === "alternate") {
+      onInput(event.deltaY < 0 ? "\x1b[A" : "\x1b[B");
+      return false;
+    }
+
+    term.scrollLines(Math.sign(event.deltaY) * WHEEL_SCROLL_LINES);
+    return false;
+  });
+
+  return () => {
+    term.attachCustomWheelEventHandler(() => true);
   };
 }
 

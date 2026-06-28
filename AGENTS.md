@@ -232,3 +232,19 @@ commit_prompt = "..."            # generate_commit_message 使用的提示词
 - **Codex**：`<project-path>/.codex/sessions/*.jsonl`
 
 会话通过项目路径、提示词文本和创建时间戳与任务进行匹配。兜底方案是从智能体退出时打印的终端输出中提取会话 ID。这是 UI 在无需直接 API 集成的情况下，将已启动进程与其会话日志关联起来的实现方式。
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked as local markdown under `.scratch/` because GitHub Issues are disabled for the writable fork. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The canonical triage labels use the default strings: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repo using root `CONTEXT.md` and root `docs/adr/`. See `docs/agents/domain.md`.
