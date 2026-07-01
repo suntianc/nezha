@@ -126,8 +126,8 @@ export function useTerminalPathDrop({
 
     function handleDragDropPayload(payload: DragDropEvent) {
       if (payload.type === "leave") return;
-      const inside = isDropInsideContainer(toCssPoint(payload.position, "physical"));
       if (payload.type === "enter" || payload.type === "over") return;
+      const inside = isDropInsideContainer(toCssPoint(payload.position, "physical"));
       if (!inside || payload.paths.length === 0) return;
 
       const key = payload.paths.join("\n");

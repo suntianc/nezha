@@ -134,6 +134,9 @@ export function NewTaskView({
   const newTaskOuterRef = useRef<HTMLDivElement>(null);
   const composeCardRef = useRef<HTMLDivElement>(null);
   const lastExternalDropRef = useRef<{ key: string; at: number } | null>(null);
+  const externalDropTargetRef = useRef(false);
+  const externalDragFrameRef = useRef<number | null>(null);
+  const pendingExternalDragPointRef = useRef<{ x: number; y: number } | null>(null);
   const editorContentRef = useRef<PromptEditorContent>({
     html: initialDraft?.promptHtml ?? "",
     text: (initialDraft?.promptHtml ?? "").replace(/<[^>]+>/g, ""),
@@ -414,6 +417,12 @@ export function NewTaskView({
     };
   }, [editorRef]);
 
+  const updateExternalDropTarget = useCallback((next: boolean) => {
+    if (externalDropTargetRef.current === next) return;
+    externalDropTargetRef.current = next;
+    setExternalDropTarget(next);
+  }, []);
+
   const insertDroppedPaths = useCallback(
     (paths: string[], source: "external" | "file-tree") => {
       const editor = editorRef.current;
@@ -431,26 +440,48 @@ export function NewTaskView({
 
   useEffect(() => {
     if (!active) {
-      setExternalDropTarget(false);
+      updateExternalDropTarget(false);
       return;
     }
 
     let disposed = false;
     let unlisten: (() => void) | null = null;
 
+    function cancelExternalDragFrame() {
+      if (externalDragFrameRef.current === null) return;
+      window.cancelAnimationFrame(externalDragFrameRef.current);
+      externalDragFrameRef.current = null;
+    }
+
+    function scheduleExternalDropTarget(position: { x: number; y: number }) {
+      pendingExternalDragPointRef.current = position;
+      if (externalDragFrameRef.current !== null) return;
+      externalDragFrameRef.current = window.requestAnimationFrame(() => {
+        externalDragFrameRef.current = null;
+        const point = pendingExternalDragPointRef.current;
+        pendingExternalDragPointRef.current = null;
+        if (!point || disposed) return;
+        updateExternalDropTarget(Boolean(findNewTaskDropPoint(point)));
+      });
+    }
+
     function handleDragDropPayload(payload: DragDropEvent) {
       if (payload.type === "leave") {
-        setExternalDropTarget(false);
+        pendingExternalDragPointRef.current = null;
+        cancelExternalDragFrame();
+        updateExternalDropTarget(false);
         return;
       }
 
-      const target = findNewTaskDropPoint(toCssPoint(payload.position, "physical"));
       if (payload.type === "enter" || payload.type === "over") {
-        setExternalDropTarget(Boolean(target));
+        scheduleExternalDropTarget(toCssPoint(payload.position, "physical"));
         return;
       }
 
-      setExternalDropTarget(false);
+      pendingExternalDragPointRef.current = null;
+      cancelExternalDragFrame();
+      updateExternalDropTarget(false);
+      const target = findNewTaskDropPoint(toCssPoint(payload.position, "physical"));
       if (!target || payload.paths.length === 0 || !editorRef.current) return;
       const key = payload.paths.join("\n");
       const now = Date.now();
@@ -490,9 +521,18 @@ export function NewTaskView({
 
     return () => {
       disposed = true;
+      pendingExternalDragPointRef.current = null;
+      cancelExternalDragFrame();
       unlisten?.();
     };
-  }, [active, editorRef, findNewTaskDropPoint, insertDroppedPaths, toCssPoint]);
+  }, [
+    active,
+    editorRef,
+    findNewTaskDropPoint,
+    insertDroppedPaths,
+    toCssPoint,
+    updateExternalDropTarget,
+  ]);
 
   useEffect(() => {
     if (!active) return;
@@ -501,11 +541,11 @@ export function NewTaskView({
       const { detail } = event as CustomEvent<FileTreePointerDragDetail>;
       const target = findNewTaskDropPoint(toCssPoint({ x: detail.x, y: detail.y }, "css"));
       if (detail.type === "start" || detail.type === "move") {
-        setExternalDropTarget(Boolean(target));
+        updateExternalDropTarget(Boolean(target));
         return;
       }
 
-      setExternalDropTarget(false);
+      updateExternalDropTarget(false);
       if (detail.type !== "drop" || !target || detail.paths.length === 0 || !editorRef.current) {
         return;
       }
@@ -522,13 +562,13 @@ export function NewTaskView({
         toCssPoint({ x: event.clientX, y: event.clientY }, "css"),
       );
       if (paths.length === 0 || !target) {
-        setExternalDropTarget(false);
+        updateExternalDropTarget(false);
         return;
       }
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = "copy";
-      setExternalDropTarget(true);
+      updateExternalDropTarget(true);
     }
 
     function handleWindowDrop(event: DragEvent) {
@@ -537,7 +577,7 @@ export function NewTaskView({
       const target = findNewTaskDropPoint(
         toCssPoint({ x: event.clientX, y: event.clientY }, "css"),
       );
-      setExternalDropTarget(false);
+      updateExternalDropTarget(false);
       if (paths.length === 0 || !target || !editorRef.current) return;
       event.preventDefault();
       event.stopPropagation();
@@ -548,7 +588,7 @@ export function NewTaskView({
     }
 
     function handleWindowDragEnd() {
-      setExternalDropTarget(false);
+      updateExternalDropTarget(false);
     }
 
     window.addEventListener(FILE_TREE_POINTER_DRAG_EVENT, handleFileTreePointerDrag);
@@ -561,7 +601,14 @@ export function NewTaskView({
       window.removeEventListener("drop", handleWindowDrop, true);
       window.removeEventListener("dragend", handleWindowDragEnd, true);
     };
-  }, [active, editorRef, findNewTaskDropPoint, insertDroppedPaths, toCssPoint]);
+  }, [
+    active,
+    editorRef,
+    findNewTaskDropPoint,
+    insertDroppedPaths,
+    toCssPoint,
+    updateExternalDropTarget,
+  ]);
 
   function handleInitializeMd() {
     const filename = agent === "claude" ? "CLAUDE.md" : "AGENTS.md";
