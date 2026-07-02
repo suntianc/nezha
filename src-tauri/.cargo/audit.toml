@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+  # Tauri 2.10.x pulls quick-xml through plist, whose current compatible
+  # release does not allow the patched quick-xml 0.41.x line yet.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
+]
